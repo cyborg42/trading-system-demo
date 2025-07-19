@@ -93,8 +93,8 @@ fn main() {
             // Generate size
             let size = generate_size(&config.size_step, &mut rng);
 
-            // 10% probability to generate cancellation (negative size)
-            let final_size = if rng.f64() < 0.1 { -size } else { size };
+            // 5% probability to generate cancellation (negative size), may cause price level not found error
+            let final_size = if rng.f64() < 0.05 { -size } else { size };
 
             // Randomly choose bid or ask direction
             let direction = if rng.bool() {
