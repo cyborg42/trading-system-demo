@@ -4,3 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+crossbeam = "0.8.4"
+parking_lot = "0.12.4"
+serde = { version = "1.0.219", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "2.0.12"
+time = { version = "0.3", features = ["macros", "local-offset", "serde"] }
+clap = { version = "4.5", features = ["derive"] }
+# tokio = { version = "1.46.1", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.2", features = ["env-filter", "time"] }
+tracing-appender = "0.2.3"
+crossbeam-utils = "0.8.21"
+rust_decimal = { version = "1.37.2", features = ["macros", "c-repr"] }
+tinystr = { version = "0.8.1", features = ["serde"] }
+zmq = "0.10.0"
+zerocopy = { version = "0.8.26", features = ["derive", "simd"] }
+fastrand = "2.3.0"
+
+[dev-dependencies]
+criterion = "0.6"
+
+[[bench]]
+name = "the_bench"
+harness = false
