@@ -4,11 +4,12 @@ use std::{
 };
 
 use clap::Parser;
+use rocksdb::{ColumnFamilyDescriptor, DB, Options, WriteBatch};
 use tracing::{debug, error, info};
 use trading_system_demo::{
     market::{Market, MarketUpdateRequest},
     ring_buffer::RingBuffer,
-    utils::init_log,
+    utils::{IDGenerator, init_log},
 };
 
 #[derive(Debug, Parser)]
@@ -20,6 +21,10 @@ struct Args {
     /// If not provided, the log will be printed to the console
     #[clap(long, short)]
     log_dir: Option<PathBuf>,
+    #[clap(long, short)]
+    snapshot_log_interval_sec: Option<u64>,
+    #[clap(long, short)]
+    db_path: Option<PathBuf>,
 }
 
 fn main() {
@@ -27,7 +32,7 @@ fn main() {
     let _guard = init_log(args.log_dir);
     info!("Starting trading service");
     info!("Trading service listening on {}", args.zmq_address);
-
+    let snapshot_log_interval = args.snapshot_log_interval_sec.map(Duration::from_secs);
     let mut rb = RingBuffer::<MarketUpdateRequest>::new(args.channel_size);
     let (mut publisher, mut subscriber) = rb.split();
     let mut subscriber_clone = subscriber.clone();
@@ -60,7 +65,7 @@ fn main() {
         s.spawn(|| {
             // read market update from ring buffer and update order book
 
-            let mut market = Market::new();
+            let mut market = Market::new(snapshot_log_interval);
             let mut lost_count = 0;
             for (request, lost) in subscriber.spinning_iter() {
                 debug!("Received market update from ring buffer: {:?}", request);
@@ -73,19 +78,36 @@ fn main() {
                 market.update_order_book(request);
             }
         });
-        s.spawn(|| {
-            // read market update from ring buffer and record to database
 
-            let mut lost_count = 0;
-            for (_request, lost) in subscriber_clone.spinning_iter() {
-                if lost > 0 {
-                    lost_count += lost;
-                    if lost_count % 100 == 0 {
-                        error!("Database record lost {} messages", lost_count);
+        if let Some(db_path) = args.db_path {
+            s.spawn(|| {
+                // read market update from ring buffer and record to database
+                let mut opts = Options::default();
+                opts.create_if_missing(true);
+                opts.create_missing_column_families(true);
+                let cf_opts = Options::default();
+                let cf_descriptor = ColumnFamilyDescriptor::new("market_update", cf_opts);
+                let db = DB::open_cf_descriptors(&opts, db_path, vec![cf_descriptor]).unwrap();
+                let cf = db.cf_handle("market_update").unwrap();
+                const BATCH_SIZE: usize = 1000;
+                let mut batch = WriteBatch::new();
+                let mut lost_count = 0;
+                let mut id_generator = IDGenerator::new();
+                for (request, lost) in subscriber_clone.spinning_iter() {
+                    if lost > 0 {
+                        lost_count += lost;
+                        if lost_count % 100 == 0 {
+                            error!("Database record lost {} messages", lost_count);
+                        }
+                    }
+                    let id = id_generator.generate(request.timestamp_ms);
+                    batch.put_cf(&cf, id.to_be_bytes(), request.as_bytes());
+                    if batch.len() >= BATCH_SIZE {
+                        db.write(batch).unwrap();
+                        batch = WriteBatch::new();
                     }
                 }
-                // TODO: record to database
-            }
-        });
+            });
+        }
     });
 }

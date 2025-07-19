@@ -18,6 +18,33 @@ pub fn now_local() -> time::OffsetDateTime {
     time::OffsetDateTime::now_utc().to_offset(*LOCAL_OFFSET)
 }
 
+pub struct IDGenerator {
+    timestamp: u64,
+    counter: u64,
+}
+
+impl IDGenerator {
+    pub fn new() -> Self {
+        Self {
+            timestamp: 0,
+            counter: 0,
+        }
+    }
+    /// generate a unique id
+    /// the id is a 64-bit integer, the first 48 bits are the timestamp, the last 16 bits are the counter
+    pub fn generate(&mut self, timestamp: u64) -> u64 {
+        if timestamp > self.timestamp {
+            self.timestamp = timestamp;
+            self.counter = 0;
+        }
+        let id = (self.timestamp << 16) | (self.counter & 0xFFFF);
+        self.counter += 1;
+        id
+    }
+}
+
+
+
 static LOG_FILE_NAME: &str = "trading_engine.log";
 
 /// Initialize the logging system

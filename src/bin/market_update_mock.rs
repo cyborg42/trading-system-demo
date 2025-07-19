@@ -12,7 +12,7 @@ use trading_system_demo::{
 struct Args {
     #[clap(long, short, default_value = "tcp://127.0.0.1:5555")]
     zmq_address: String,
-    #[clap(long, short, default_value = "1000")]
+    #[clap(long, short, default_value = "100")]
     interval_ms: u64,
 }
 

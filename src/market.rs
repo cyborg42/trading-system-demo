@@ -1,11 +1,15 @@
-use std::{alloc::Layout, collections::HashMap};
+use std::{
+    alloc::Layout,
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use crate::{
     common_types::{DecimalZerocopy, Direction, Price, Size, SymbolStr, SymbolStrZerocopy},
     order_book::OrderBook,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,14 +99,20 @@ impl TryFrom<&[u8]> for &MarketUpdateRequest {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Market {
     pub order_books: HashMap<SymbolStr, OrderBook>,
+    snapshot_log_interval: Option<Duration>,
+    last_snapshot_time: Instant,
 }
 
 impl Market {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(snapshot_log_interval: Option<Duration>) -> Self {
+        Self {
+            order_books: HashMap::new(),
+            snapshot_log_interval,
+            last_snapshot_time: Instant::now(),
+        }
     }
     pub fn update_order_book(&mut self, request: MarketUpdateRequest) {
         debug!("Updating order book: {:?}", request);
@@ -114,6 +124,12 @@ impl Market {
             }
             Err(e) => {
                 error!("Error updating order book: {:?}", e);
+            }
+        }
+        if let Some(snapshot_log_interval) = self.snapshot_log_interval {
+            if self.last_snapshot_time.elapsed() > snapshot_log_interval {
+                self.last_snapshot_time = Instant::now();
+                info!("Order book snapshot:\n{:?}", self.order_books);
             }
         }
     }
