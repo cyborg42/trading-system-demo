@@ -30,16 +30,16 @@ Options:
 Processes market updates and maintains order book:
 
 ```bash
-cargo run --bin execution_engine -- --channel-size 1000 --db-path ./rocksdb
+cargo run --bin execution_engine -- --buffer-size 1000 --db-path ./rocksdb
 ```
 
 Options:
 
-- `--channel-size`: Ring buffer size (default: 1000)
+- `--buffer-size`: Ring buffer size (default: 1000)
 - `--zmq-address`: ZMQ endpoint (default: tcp://127.0.0.1:5555)
 - `--db-path`: RocksDB storage path (optional)
 - `--log-dir`: Log directory (optional)
-- `--snapshot-log-interval-sec`: Order book snapshot interval (optional)
+- `--snapshot-log-interval-sec`: Order book snapshot log interval (optional)
 
 ### 3. Database Reader
 

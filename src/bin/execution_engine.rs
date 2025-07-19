@@ -17,7 +17,7 @@ struct Args {
     #[clap(long, short, default_value = "tcp://127.0.0.1:5555")]
     zmq_address: String,
     #[clap(long, short, default_value = "1000")]
-    channel_size: usize,
+    buffer_size: usize,
     /// If not provided, the log will be printed to the console
     #[clap(long, short)]
     log_dir: Option<PathBuf>,
@@ -33,7 +33,7 @@ fn main() {
     info!("Starting trading service");
     info!("Trading service listening on {}", args.zmq_address);
     let snapshot_log_interval = args.snapshot_log_interval_sec.map(Duration::from_secs);
-    let mut rb = RingBuffer::<MarketUpdateRequest>::new(args.channel_size);
+    let mut rb = RingBuffer::<MarketUpdateRequest>::new(args.buffer_size);
     let (mut publisher, mut subscriber) = rb.split();
     let mut subscriber_clone = subscriber.clone();
     std::thread::scope(|s| {
