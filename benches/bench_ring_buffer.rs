@@ -137,42 +137,6 @@ fn benchmark_custom_ring_buffer(c: &mut Criterion) {
     });
 }
 
-// Benchmark: Spinning reads with custom ring buffer
-fn benchmark_custom_ring_buffer_spinning(c: &mut Criterion) {
-    c.bench_function("Custom Ring Buffer - Spinning", |b| {
-        b.iter(|| {
-            let mut ring_buffer = RingBuffer::new(BUFFER_SIZE);
-            let (mut publisher, mut subscriber) = ring_buffer.split();
-            let test_data = create_test_data(MESSAGES_PER_TEST);
-
-            thread::scope(|s| {
-                // Producer thread
-                let producer_handle = s.spawn(move || {
-                    for update in test_data {
-                        publisher.write(update);
-                    }
-                });
-
-                // Consumer thread with spinning reads
-                let consumer_handle = s.spawn(move || {
-                    let mut received_count = 0;
-                    while received_count < MESSAGES_PER_TEST {
-                        let (update, lost) = subscriber.read_spinning();
-                        black_box(update);
-                        received_count += 1;
-                        received_count += lost;
-                    }
-                    received_count
-                });
-
-                producer_handle.join().unwrap();
-                let received = consumer_handle.join().unwrap();
-                assert_eq!(received, MESSAGES_PER_TEST);
-            });
-        });
-    });
-}
-
 // Latency test - measure end-to-end latency using cross-thread measurement
 fn benchmark_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("E2E Latency");
@@ -285,7 +249,6 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     benchmark_crossbeam_bounded(c);
     benchmark_crossbeam_unbounded(c);
     benchmark_custom_ring_buffer(c);
-    benchmark_custom_ring_buffer_spinning(c);
     benchmark_latency(c);
 }
 

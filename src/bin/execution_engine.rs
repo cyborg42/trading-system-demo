@@ -21,8 +21,8 @@ struct Args {
     /// If not provided, the log will be printed to the console
     #[clap(long, short)]
     log_dir: Option<PathBuf>,
-    #[clap(long, short)]
-    snapshot_log_interval_sec: Option<u64>,
+    #[clap(long, short, default_value = "true")]
+    snapshot_log: bool,
     #[clap(long, short)]
     db_path: Option<PathBuf>,
 }
@@ -32,7 +32,11 @@ fn main() {
     let _guard = init_log(args.log_dir);
     info!("Starting trading service");
     info!("Trading service listening on {}", args.zmq_address);
-    let snapshot_log_interval = args.snapshot_log_interval_sec.map(Duration::from_secs);
+    let snapshot_log_interval = if args.snapshot_log {
+        Some(Duration::from_secs(10))
+    } else {
+        None
+    };
     let mut rb = RingBuffer::<MarketUpdateRequest>::new(args.buffer_size);
     let (mut publisher, mut subscriber) = rb.split();
     let mut subscriber_clone = subscriber.clone();
@@ -59,7 +63,7 @@ fn main() {
                         continue;
                     }
                 };
-                publisher.write(request.clone());
+                publisher.write(*request);
             }
         });
         s.spawn(|| {

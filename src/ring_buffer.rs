@@ -372,7 +372,7 @@ impl<'a, T> Subscriber<'a, T> {
         T: Copy,
     {
         self.read_inner()
-            .map(|(msg, lost_count)| unsafe { (msg.assume_init(), lost_count) })
+            .map(|(msg, lost_count)| (unsafe { msg.assume_init() }, lost_count))
     }
 
     /// Read a message from the ring buffer.
@@ -399,7 +399,7 @@ impl<'a, T> Subscriber<'a, T> {
         T: Clone,
     {
         self.read_inner()
-            .map(|(msg, lost_count)| unsafe { (msg.assume_init_ref().clone(), lost_count) })
+            .map(|(msg, lost_count)| (unsafe { msg.assume_init_ref().clone() }, lost_count))
     }
 
     /// Read a message from the ring buffer using bitwise copy.
@@ -506,10 +506,10 @@ impl<'a, T> Subscriber<'a, T> {
     /// ```
     pub fn read_spinning(&mut self) -> (T, usize)
     where
-        T: Clone,
+        T: Copy,
     {
         loop {
-            if let Some(result) = self.read_clone() {
+            if let Some(result) = self.read() {
                 return result;
             }
             std::hint::spin_loop();
@@ -556,7 +556,7 @@ pub struct SpinningIterator<'a, 'b, T> {
 
 impl<'a, 'b, T> Iterator for SpinningIterator<'a, 'b, T>
 where
-    T: Clone,
+    T: Copy,
 {
     type Item = (T, usize);
 

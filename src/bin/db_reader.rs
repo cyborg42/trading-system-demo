@@ -1,7 +1,7 @@
 use clap::Parser;
-use rocksdb::{ColumnFamilyDescriptor, IteratorMode, Options, DB};
-use trading_system_demo::market::MarketUpdateRequest;
+use rocksdb::{ColumnFamilyDescriptor, DB, IteratorMode, Options};
 use std::path::PathBuf;
+use trading_system_demo::market::MarketUpdateRequest;
 
 #[derive(Debug, Parser)]
 struct Args {

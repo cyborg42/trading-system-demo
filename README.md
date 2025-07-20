@@ -39,7 +39,7 @@ Options:
 - `--zmq-address`: ZMQ endpoint (default: tcp://127.0.0.1:5555)
 - `--db-path`: RocksDB storage path (optional)
 - `--log-dir`: Log directory (optional)
-- `--snapshot-log-interval-sec`: Order book snapshot log interval (optional)
+- `--snapshot-log`: Whether to log order book snapshots (default: true)
 
 ### 3. Database Reader
 

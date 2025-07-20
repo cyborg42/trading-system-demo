@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(C)]
 pub struct MarketUpdate {
     pub price: Price,
@@ -32,7 +32,7 @@ impl MarketUpdate {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(C)]
 pub struct MarketUpdateRequest {
     pub symbol: SymbolStr,
