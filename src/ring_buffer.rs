@@ -361,11 +361,6 @@ impl<'a, T> Subscriber<'a, T> {
     ///
     /// Returns `None` if no new messages are available.
     ///
-    /// # Thread Safety
-    ///
-    /// This method is thread-safe and can be called concurrently from multiple
-    /// threads using different subscriber instances.
-    ///
     /// # Performance
     ///
     /// This method uses zero-copy reads for optimal performance. The message
@@ -394,11 +389,6 @@ impl<'a, T> Subscriber<'a, T> {
     ///
     /// Returns `None` if no new messages are available.
     ///
-    /// # Thread Safety
-    ///
-    /// This method is thread-safe and can be called concurrently from multiple
-    /// threads using different subscriber instances.
-    ///
     /// # Performance
     ///
     /// This method clones the message when reading, which may have performance
@@ -410,6 +400,70 @@ impl<'a, T> Subscriber<'a, T> {
     {
         self.read_inner()
             .map(|(msg, lost_count)| unsafe { (msg.assume_init_ref().clone(), lost_count) })
+    }
+
+    /// Read a message from the ring buffer using bitwise copy.
+    ///
+    /// This method reads a message from the current read position and advances
+    /// the read index. It returns both the message and information about any
+    /// messages that were lost due to buffer overflow.
+    ///
+    /// # Return Value
+    ///
+    /// Returns `Some((message, lost_count))` where:
+    /// - `message`: The message read from the buffer
+    /// - `lost_count`: The number of messages that were lost due to buffer overflow
+    ///
+    /// Returns `None` if no new messages are available.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe and should only be used for types that can be safely
+    /// bitwise copied without implementing `Copy`. This includes:
+    /// - Custom types that are designed for bitwise copying
+    /// - Types that don't own heap-allocated data
+    ///
+    /// # ⚠️ Important Warnings
+    ///
+    /// **DO NOT use this method with types that own heap-allocated data** such as:
+    /// - `String` - Will cause double free of the string's buffer
+    /// - `Vec<T>` - Will cause double free of the vector's buffer
+    /// - `Box<T>` - Will cause double free of the boxed data
+    /// - Any type containing `String`, `Vec`, `Box`, etc.
+    ///
+    /// For types that own heap data, use `read_clone()` instead, which safely
+    /// clones the data and avoids double free issues.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use trading_system_demo::ring_buffer::RingBuffer;
+    ///
+    /// // ✅ Safe: Custom type designed for bitwise copy
+    /// #[repr(C)]
+    /// struct SafeType {
+    ///     a: u32,
+    ///     b: u64,
+    /// }
+    ///
+    /// let mut buffer = RingBuffer::new(10);
+    /// let (mut publisher, mut subscriber) = buffer.split();
+    /// publisher.write(SafeType { a: 1, b: 2 });
+    ///
+    /// // Safe to use read_copy for SafeType
+    /// if let Some((msg, lost)) = unsafe { subscriber.read_copy() } {
+    ///     println!("Received: a={}, b={}", msg.a, msg.b);
+    /// }
+    ///
+    /// // ❌ DANGEROUS: Never do this with String
+    /// // let mut buffer = RingBuffer::new(10);
+    /// // let (mut publisher, mut subscriber) = buffer.split();
+    /// // publisher.write("hello".to_string());
+    /// // let result = unsafe { subscriber.read_copy() }; // DOUBLE FREE!
+    /// ```
+    pub unsafe fn read_copy(&mut self) -> Option<(T, usize)> {
+        self.read_inner()
+            .map(|(msg, lost_count)| (unsafe { msg.assume_init() }, lost_count))
     }
 
     /// Read a message from the ring buffer with spinning.
