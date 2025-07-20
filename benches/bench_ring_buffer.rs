@@ -12,21 +12,10 @@ use trading_system_demo::ring_buffer::RingBuffer;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct MarketUpdate {
-    symbol: String,
-    price: f64,
-    size: u32,
-    timestamp: u64,
-}
-
-impl MarketUpdate {
-    fn new(symbol: &str, price: f64, size: u32, timestamp: u64) -> Self {
-        Self {
-            symbol: symbol.to_string(),
-            price,
-            size,
-            timestamp,
-        }
-    }
+    pub symbol: String,
+    pub price: f64,
+    pub size: u32,
+    pub timestamp: u64,
 }
 
 // Benchmark configurations
@@ -36,7 +25,12 @@ const MESSAGES_PER_TEST: usize = 100000;
 // Helper function to create test data
 fn create_test_data(count: usize) -> Vec<MarketUpdate> {
     (0..count)
-        .map(|i| MarketUpdate::new("AAPL", 150.0 + (i as f64 * 0.01), i as u32, i as u64))
+        .map(|i| MarketUpdate {
+            symbol: "AAPL".to_string(),
+            price: 150.0 + (i as f64 * 0.01),
+            size: i as u32,
+            timestamp: i as u64,
+        })
         .collect()
 }
 
@@ -126,50 +120,10 @@ fn benchmark_custom_ring_buffer(c: &mut Criterion) {
                 let consumer_handle = s.spawn(move || {
                     let mut received_count = 0;
                     while received_count < MESSAGES_PER_TEST {
-                        if let Some((update, lost)) = subscriber.read() {
+                        if let Some((update, lost)) = subscriber.read_clone() {
                             black_box(update);
                             received_count += 1;
                             received_count += lost;
-                        }
-                    }
-                    received_count
-                });
-
-                producer_handle.join().unwrap();
-                let received = consumer_handle.join().unwrap();
-                assert_eq!(received, MESSAGES_PER_TEST);
-            });
-        });
-    });
-}
-
-// Benchmark: Zero-copy reads with custom ring buffer
-fn benchmark_custom_ring_buffer_zerocopy(c: &mut Criterion) {
-    c.bench_function("Custom Ring Buffer - Zero-Copy", |b| {
-        b.iter(|| {
-            let mut ring_buffer = RingBuffer::new(BUFFER_SIZE);
-            let (mut publisher, mut subscriber) = ring_buffer.split();
-            let test_data = create_test_data(MESSAGES_PER_TEST);
-
-            thread::scope(|s| {
-                // Producer thread
-                let producer_handle = s.spawn(move || {
-                    for update in test_data {
-                        publisher.write(update);
-                    }
-                });
-
-                // Consumer thread with zero-copy reads
-                let consumer_handle = s.spawn(move || {
-                    let mut received_count = 0;
-                    while received_count < MESSAGES_PER_TEST {
-                        unsafe {
-                            if let Some((_result, lost)) = subscriber.read_zerocopy(|update| {
-                                black_box(update);
-                            }) {
-                                received_count += 1;
-                                received_count += lost;
-                            }
                         }
                     }
                     received_count
@@ -238,7 +192,7 @@ fn benchmark_latency(c: &mut Criterion) {
                         let mut received_count: usize = 0;
                         let mut count: u32 = 0;
                         while received_count < MESSAGES_PER_TEST {
-                            if let Some((update, lost)) = subscriber.read() {
+                            if let Some((update, lost)) = subscriber.read_clone() {
                                 total_latency += update.1.elapsed();
                                 received_count += 1;
                                 received_count += lost;
@@ -328,11 +282,9 @@ fn benchmark_latency(c: &mut Criterion) {
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
-    // Run comprehensive benchmarks
     benchmark_crossbeam_bounded(c);
     benchmark_crossbeam_unbounded(c);
     benchmark_custom_ring_buffer(c);
-    benchmark_custom_ring_buffer_zerocopy(c);
     benchmark_custom_ring_buffer_spinning(c);
     benchmark_latency(c);
 }

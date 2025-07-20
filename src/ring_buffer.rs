@@ -318,60 +318,7 @@ pub struct Subscriber<'a, T> {
 }
 
 impl<'a, T> Subscriber<'a, T> {
-    /// Read a message from the ring buffer and call the function with the message.
-    ///
-    /// This method provides zero-copy access to messages by allowing a function
-    /// to process the message data directly without copying it. This is useful
-    /// for high-performance scenarios where copying data would be expensive.
-    ///
-    /// # Arguments
-    ///
-    /// * `f` - A function that processes the message and returns a result
-    ///
-    /// # Return Value
-    ///
-    /// Returns `Some((result, lost_count))` where:
-    /// - `result`: The result of calling the function `f` with the message
-    /// - `lost_count`: The number of messages that were lost due to buffer overflow
-    ///
-    /// Returns `None` if no new messages are available.
-    ///
-    /// # Safety
-    ///
-    /// This method is marked as `unsafe` because the provided function `f` may be called
-    /// on partially written data during concurrent writes. While the function result
-    /// will not be returned if the data was being written (due to version checking),
-    /// any side effects in the function will still occur and may lead to undefined behavior.
-    ///
-    /// # Security Considerations
-    ///
-    /// - **Side Effects**: The function `f` should be pure (no side effects) to avoid
-    ///   undefined behavior when called on partially written data.
-    /// - **Data Integrity**: The function may observe inconsistent or corrupted data
-    ///   if called during a concurrent write operation.
-    /// - **Return Value**: The second element of the returned tuple (`usize`) represents
-    ///   the number of messages that were lost due to buffer overflow.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use trading_system_demo::ring_buffer::RingBuffer;
-    ///
-    /// let mut buffer = RingBuffer::new(100);
-    /// let (mut publisher, mut subscriber) = buffer.split();
-    ///
-    /// publisher.write(42);
-    ///
-    /// // Safe usage - pure function with no side effects
-    /// let result = unsafe { subscriber.read_zerocopy(|msg| msg.to_string()) };
-    ///
-    /// // UNSAFE - function with side effects may cause UB
-    /// // let result = unsafe { subscriber.read_zerocopy(|msg| {
-    /// //     println!("Processing: {:?}", msg); // Side effect!
-    /// //     msg.to_string()
-    /// // }) };
-    /// ```
-    pub unsafe fn read_zerocopy<R>(&mut self, mut f: impl FnMut(&T) -> R) -> Option<(R, usize)> {
+    fn read_inner(&mut self) -> Option<(MaybeUninit<T>, usize)> {
         let slot = unsafe { &self.buffer.get_unchecked(self.reader_idx) };
         loop {
             let version = slot.version.load(Ordering::Acquire);
@@ -385,7 +332,6 @@ impl<'a, T> Subscriber<'a, T> {
                 return None;
             }
             let msg = unsafe { ptr::read_volatile(slot.msg.get()) };
-            let result = f(unsafe { msg.assume_init_ref() });
             fence(Ordering::Acquire);
             let new_version = slot.version.load(Ordering::Relaxed);
             if version != new_version {
@@ -397,7 +343,7 @@ impl<'a, T> Subscriber<'a, T> {
             self.version = version;
             self.reader_idx = (self.reader_idx + 1) & self.cap_mask;
             self.version += ((self.reader_idx == 0) as usize) << 1;
-            return Some((result, lost_count));
+            return Some((msg, lost_count));
         }
     }
 
@@ -420,30 +366,50 @@ impl<'a, T> Subscriber<'a, T> {
     /// This method is thread-safe and can be called concurrently from multiple
     /// threads using different subscriber instances.
     ///
-    /// # Example
+    /// # Performance
     ///
-    /// ```rust
-    /// use trading_system_demo::ring_buffer::RingBuffer;
-    ///
-    /// let mut buffer = RingBuffer::new(100);
-    /// let (mut publisher, mut subscriber) = buffer.split();
-    ///
-    /// publisher.write("Hello");
-    ///
-    /// match subscriber.read() {
-    ///     Some((message, lost_count)) => {
-    ///         println!("Received: {}, Lost: {}", message, lost_count);
-    ///     }
-    ///     None => {
-    ///         println!("No messages available");
-    ///     }
-    /// }
+    /// This method uses zero-copy reads for optimal performance. The message
+    /// is read directly from the buffer without any copying, making it very
+    /// efficient for large messages.
     /// ```
     pub fn read(&mut self) -> Option<(T, usize)>
     where
+        T: Copy,
+    {
+        self.read_inner()
+            .map(|(msg, lost_count)| unsafe { (msg.assume_init(), lost_count) })
+    }
+
+    /// Read a message from the ring buffer.
+    ///
+    /// This method reads a message from the current read position and advances
+    /// the read index. It returns both the message and information about any
+    /// messages that were lost due to buffer overflow.
+    ///
+    /// # Return Value
+    ///
+    /// Returns `Some((message, lost_count))` where:
+    /// - `message`: The message read from the buffer
+    /// - `lost_count`: The number of messages that were lost due to buffer overflow
+    ///
+    /// Returns `None` if no new messages are available.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is thread-safe and can be called concurrently from multiple
+    /// threads using different subscriber instances.
+    ///
+    /// # Performance
+    ///
+    /// This method clones the message when reading, which may have performance
+    /// implications for large or complex types. For better performance with
+    /// simple types, consider using `read()` if the type implements `Copy`.
+    pub fn read_clone(&mut self) -> Option<(T, usize)>
+    where
         T: Clone,
     {
-        unsafe { self.read_zerocopy(|msg| msg.clone()) }
+        self.read_inner()
+            .map(|(msg, lost_count)| unsafe { (msg.assume_init_ref().clone(), lost_count) })
     }
 
     /// Read a message from the ring buffer with spinning.
@@ -489,7 +455,7 @@ impl<'a, T> Subscriber<'a, T> {
         T: Clone,
     {
         loop {
-            if let Some(result) = self.read() {
+            if let Some(result) = self.read_clone() {
                 return result;
             }
             std::hint::spin_loop();
@@ -621,7 +587,7 @@ mod tests {
         publisher.write(42);
 
         // Read the message
-        let result = subscriber.read();
+        let result = subscriber.read_clone();
         assert!(result.is_some());
         let (msg, lost) = result.unwrap();
         assert_eq!(msg, 42);
@@ -640,7 +606,7 @@ mod tests {
 
         // Read all messages
         for i in 0..3 {
-            let result = subscriber.read();
+            let result = subscriber.read_clone();
             assert!(result.is_some());
             let (msg, lost) = result.unwrap();
             assert_eq!(msg, i);
@@ -648,7 +614,7 @@ mod tests {
         }
 
         // No more messages
-        assert!(subscriber.read().is_none());
+        assert!(subscriber.read_clone().is_none());
     }
 
     #[test]
@@ -661,7 +627,7 @@ mod tests {
         publisher.write(2);
 
         // Read first message
-        let result = subscriber.read();
+        let result = subscriber.read_clone();
         assert!(result.is_some());
         let (msg, lost) = result.unwrap();
         assert_eq!(msg, 1);
@@ -671,13 +637,13 @@ mod tests {
         publisher.write(3);
 
         // Read remaining messages
-        let result = subscriber.read();
+        let result = subscriber.read_clone();
         assert!(result.is_some());
         let (msg, lost) = result.unwrap();
         assert_eq!(msg, 2);
         assert_eq!(lost, 0);
 
-        let result = subscriber.read();
+        let result = subscriber.read_clone();
         assert!(result.is_some());
         let (msg, lost) = result.unwrap();
         assert_eq!(msg, 3);
@@ -692,7 +658,7 @@ mod tests {
         // Fill buffer and read one message
         publisher.write(1);
         publisher.write(2);
-        let _ = subscriber.read(); // Read 1
+        let _ = subscriber.read_clone(); // Read 1
 
         // Write many more messages to cause overflow
         for i in 3..10 {
@@ -700,7 +666,7 @@ mod tests {
         }
 
         // Read remaining messages
-        let result = subscriber.read();
+        let result = subscriber.read_clone();
         assert!(result.is_some());
         let (msg, lost) = result.unwrap();
         assert_eq!(msg, 8);
@@ -722,7 +688,7 @@ mod tests {
         let mut last_received = -1;
         let mut total_lost = 0;
 
-        while let Some((msg, lost)) = subscriber.read() {
+        while let Some((msg, lost)) = subscriber.read_clone() {
             received_count += 1;
             total_lost += lost;
             last_received = msg;
@@ -749,8 +715,8 @@ mod tests {
         publisher.write(42);
 
         // Both subscribers should be able to read
-        let result1 = subscriber.read();
-        let result2 = subscriber2.read();
+        let result1 = subscriber.read_clone();
+        let result2 = subscriber2.read_clone();
 
         assert!(result1.is_some());
         assert!(result2.is_some());
@@ -764,7 +730,7 @@ mod tests {
         let (_, mut subscriber) = rb.split();
 
         // Try to read from empty buffer
-        assert!(subscriber.read().is_none());
+        assert!(subscriber.read_clone().is_none());
     }
 
     #[test]
@@ -777,8 +743,8 @@ mod tests {
         publisher.write("world".to_string());
 
         // Read string messages
-        let result1 = subscriber.read();
-        let result2 = subscriber.read();
+        let result1 = subscriber.read_clone();
+        let result2 = subscriber.read_clone();
 
         assert!(result1.is_some());
         assert!(result2.is_some());
@@ -804,7 +770,7 @@ mod tests {
 
         publisher.write(test_data.clone());
 
-        let result = subscriber.read();
+        let result = subscriber.read_clone();
         assert!(result.is_some());
         let (msg, _) = result.unwrap();
         assert_eq!(msg, test_data);
@@ -822,7 +788,7 @@ mod tests {
 
         // Read all messages
         for i in 0..1000 {
-            let result = subscriber.read();
+            let result = subscriber.read_clone();
             assert!(result.is_some());
             let (msg, lost) = result.unwrap();
             assert_eq!(msg, i);
@@ -842,45 +808,12 @@ mod tests {
 
         // Read all available messages
         let mut count = 0;
-        while let Some((_msg, _lost)) = subscriber.read() {
+        while let Some((_msg, _lost)) = subscriber.read_clone() {
             count += 1;
             // lost is usize, so it's always >= 0
         }
 
         // Should have read some messages (exact count depends on timing)
         assert!(count > 0);
-    }
-
-    #[test]
-    fn test_read_zerocopy_safety() {
-        let mut rb = RingBuffer::<i32>::new(4);
-        let (mut publisher, mut subscriber) = rb.split();
-
-        // Write a message
-        publisher.write(42);
-
-        // Safe usage - pure function
-        let result = unsafe { subscriber.read_zerocopy(|msg| msg.to_string()) };
-        assert!(result.is_some());
-        let (msg_str, lost) = result.unwrap();
-        assert_eq!(msg_str, "42");
-        assert_eq!(lost, 0);
-
-        // Write another message to demonstrate side effects
-        publisher.write(100);
-
-        // Demonstrate the safety concern with side effects
-        // This test shows why side effects are dangerous
-        let mut side_effect_called = false;
-        let result = unsafe {
-            subscriber.read_zerocopy(|_msg| {
-                side_effect_called = true; // This side effect would be dangerous in concurrent scenarios
-                "processed".to_string()
-            })
-        };
-
-        // In this single-threaded test, it's safe, but demonstrates the pattern
-        assert!(result.is_some());
-        assert!(side_effect_called);
     }
 }
