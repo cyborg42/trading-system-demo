@@ -6,13 +6,13 @@ use std::{
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use crossbeam::channel::{bounded, unbounded};
-use trading_system_demo::ring_buffer::RingBuffer;
+use trading_system_demo::{common_types::SymbolStr, ring_buffer::RingBuffer};
 
 // Test data structure that simulates market updates
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 struct MarketUpdate {
-    pub symbol: String,
+    pub symbol: SymbolStr,
     pub price: f64,
     pub size: u32,
     pub timestamp: u64,
@@ -26,7 +26,7 @@ const MESSAGES_PER_TEST: usize = 100000;
 fn create_test_data(count: usize) -> Vec<MarketUpdate> {
     (0..count)
         .map(|i| MarketUpdate {
-            symbol: "AAPL".to_string(),
+            symbol: "AAPL".parse().unwrap(),
             price: 150.0 + (i as f64 * 0.01),
             size: i as u32,
             timestamp: i as u64,

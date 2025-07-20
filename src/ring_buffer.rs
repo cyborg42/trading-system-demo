@@ -10,7 +10,7 @@
 use std::{
     cell::UnsafeCell,
     mem::MaybeUninit,
-    ptr,
+    ptr::{self, drop_in_place},
     sync::atomic::{AtomicUsize, Ordering, fence},
 };
 
@@ -182,6 +182,22 @@ impl<T> RingBuffer<T> {
     }
 }
 
+impl<T> Drop for RingBuffer<T> {
+    fn drop(&mut self) {
+        if !std::mem::needs_drop::<T>() {
+            return;
+        }
+        for slot in self.buffer.iter() {
+            if slot.version.load(Ordering::Relaxed) == 0 {
+                break;
+            }
+            unsafe {
+                drop_in_place(slot.msg.get().cast::<T>());
+            }
+        }
+    }
+}
+
 /// A publisher that writes messages to a ring buffer.
 ///
 /// The publisher is responsible for writing messages to the ring buffer.
@@ -227,34 +243,37 @@ impl<'a, T> Publisher<'a, T> {
     ///
     /// This method writes a message to the current write position and advances
     /// the write index. If the buffer is full, the oldest message will be overwritten.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg` - The message to write to the buffer
-    ///
-    /// # Thread Safety
-    ///
-    /// This method is thread-safe for concurrent reads but should only be called
-    /// from a single thread to avoid race conditions on the writer index.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use trading_system_demo::ring_buffer::RingBuffer;
-    ///
-    /// let mut buffer = RingBuffer::new(10);
-    /// let (mut publisher, _) = buffer.split();
-    ///
-    /// publisher.write("Hello");
-    /// publisher.write("World");
-    /// ```
-    pub fn write(&mut self, msg: T) {
+    pub fn write(&mut self, msg: T)
+    where
+        T: Copy,
+    {
         let slot = unsafe { &self.buffer.get_unchecked(*self.writer_idx) };
         let version = slot.version.fetch_add(1, Ordering::Acquire);
         // Only one thread can write to the buffer at a time, so we don't need to check for version
         debug_assert!(version & 1 == 0);
         unsafe {
-            ptr::write_volatile(slot.msg.get(), MaybeUninit::new(msg));
+            slot.msg.get().cast::<T>().write(msg);
+        }
+        slot.version.fetch_add(1, Ordering::Release);
+        *self.writer_idx = (*self.writer_idx + 1) & self.cap_mask;
+    }
+
+    /// Write a message to the ring buffer and drop the previous message if it exists.
+    ///
+    /// This method writes a message to the current write position and advances
+    /// the write index. If the buffer is full, the oldest message will be overwritten.
+    pub fn write_clean(&mut self, msg: T) {
+        let slot = unsafe { &self.buffer.get_unchecked(*self.writer_idx) };
+        let version = slot.version.fetch_add(1, Ordering::Acquire);
+        // Only one thread can write to the buffer at a time, so we don't need to check for version
+        debug_assert!(version & 1 == 0);
+        if version != 0 {
+            unsafe {
+                drop_in_place(slot.msg.get().cast::<T>());
+            }
+        }
+        unsafe {
+            slot.msg.get().cast::<T>().write(msg);
         }
         slot.version.fetch_add(1, Ordering::Release);
         *self.writer_idx = (*self.writer_idx + 1) & self.cap_mask;
@@ -318,90 +337,6 @@ pub struct Subscriber<'a, T> {
 }
 
 impl<'a, T> Subscriber<'a, T> {
-    fn read_inner(&mut self) -> Option<(MaybeUninit<T>, usize)> {
-        let slot = unsafe { &self.buffer.get_unchecked(self.reader_idx) };
-        loop {
-            let version = slot.version.load(Ordering::Acquire);
-            if version & 1 != 0 {
-                // Message is being written
-                std::hint::spin_loop();
-                continue;
-            }
-            if version < self.version {
-                // No new messages
-                return None;
-            }
-            let msg = unsafe { ptr::read_volatile(slot.msg.get()) };
-            fence(Ordering::Acquire);
-            let new_version = slot.version.load(Ordering::Relaxed);
-            if version != new_version {
-                // Message is being written
-                std::hint::spin_loop();
-                continue;
-            }
-            let lost_count = (version - self.version) << self.cap_zeros_sub_one;
-            self.version = version;
-            self.reader_idx = (self.reader_idx + 1) & self.cap_mask;
-            self.version += ((self.reader_idx == 0) as usize) << 1;
-            return Some((msg, lost_count));
-        }
-    }
-
-    /// Read a message from the ring buffer.
-    ///
-    /// This method reads a message from the current read position and advances
-    /// the read index. It returns both the message and information about any
-    /// messages that were lost due to buffer overflow.
-    ///
-    /// # Return Value
-    ///
-    /// Returns `Some((message, lost_count))` where:
-    /// - `message`: The message read from the buffer
-    /// - `lost_count`: The number of messages that were lost due to buffer overflow
-    ///
-    /// Returns `None` if no new messages are available.
-    ///
-    /// # Performance
-    ///
-    /// This method uses zero-copy reads for optimal performance. The message
-    /// is read directly from the buffer without any copying, making it very
-    /// efficient for large messages.
-    /// ```
-    pub fn read(&mut self) -> Option<(T, usize)>
-    where
-        T: Copy,
-    {
-        self.read_inner()
-            .map(|(msg, lost_count)| (unsafe { msg.assume_init() }, lost_count))
-    }
-
-    /// Read a message from the ring buffer.
-    ///
-    /// This method reads a message from the current read position and advances
-    /// the read index. It returns both the message and information about any
-    /// messages that were lost due to buffer overflow.
-    ///
-    /// # Return Value
-    ///
-    /// Returns `Some((message, lost_count))` where:
-    /// - `message`: The message read from the buffer
-    /// - `lost_count`: The number of messages that were lost due to buffer overflow
-    ///
-    /// Returns `None` if no new messages are available.
-    ///
-    /// # Performance
-    ///
-    /// This method clones the message when reading, which may have performance
-    /// implications for large or complex types. For better performance with
-    /// simple types, consider using `read()` if the type implements `Copy`.
-    pub fn read_clone(&mut self) -> Option<(T, usize)>
-    where
-        T: Clone,
-    {
-        self.read_inner()
-            .map(|(msg, lost_count)| (unsafe { msg.assume_init_ref().clone() }, lost_count))
-    }
-
     /// Read a message from the ring buffer using bitwise copy.
     ///
     /// This method reads a message from the current read position and advances
@@ -441,6 +376,7 @@ impl<'a, T> Subscriber<'a, T> {
     ///
     /// // ✅ Safe: Custom type designed for bitwise copy
     /// #[repr(C)]
+    /// #[derive(Copy, Clone)]
     /// struct SafeType {
     ///     a: u32,
     ///     b: u64,
@@ -462,8 +398,91 @@ impl<'a, T> Subscriber<'a, T> {
     /// // let result = unsafe { subscriber.read_copy() }; // DOUBLE FREE!
     /// ```
     pub unsafe fn read_copy(&mut self) -> Option<(T, usize)> {
-        self.read_inner()
-            .map(|(msg, lost_count)| (unsafe { msg.assume_init() }, lost_count))
+        let slot = unsafe { &self.buffer.get_unchecked(self.reader_idx) };
+        loop {
+            let version = slot.version.load(Ordering::Acquire);
+            if version & 1 != 0 {
+                // Message is being written
+                std::hint::spin_loop();
+                continue;
+            }
+            if version < self.version {
+                // No new messages
+                return None;
+            }
+            let msg = unsafe { ptr::read_volatile(slot.msg.get().cast::<T>()) };
+            fence(Ordering::Acquire);
+            let new_version = slot.version.load(Ordering::Relaxed);
+            if version != new_version {
+                // Message is being written
+                std::hint::spin_loop();
+                continue;
+            }
+            let lost_count = (version - self.version) << self.cap_zeros_sub_one;
+            self.version = version;
+            self.reader_idx = (self.reader_idx + 1) & self.cap_mask;
+            self.version += ((self.reader_idx == 0) as usize) << 1;
+            return Some((msg, lost_count));
+        }
+    }
+
+    /// Read a message from the ring buffer.
+    ///
+    /// This method reads a message from the current read position and advances
+    /// the read index. It returns both the message and information about any
+    /// messages that were lost due to buffer overflow.
+    ///
+    /// # Return Value
+    ///
+    /// Returns `Some((message, lost_count))` where:
+    /// - `message`: The message read from the buffer
+    /// - `lost_count`: The number of messages that were lost due to buffer overflow
+    ///
+    /// Returns `None` if no new messages are available.
+    ///
+    /// # Performance
+    ///
+    /// This method uses zero-copy reads for optimal performance. The message
+    /// is read directly from the buffer without any copying, making it very
+    /// efficient for large messages.
+    /// ```
+    pub fn read(&mut self) -> Option<(T, usize)>
+    where
+        T: Copy,
+    {
+        unsafe { self.read_copy() }
+    }
+
+    /// Read a message from the ring buffer.
+    ///
+    /// This method reads a message from the current read position and advances
+    /// the read index. It returns both the message and information about any
+    /// messages that were lost due to buffer overflow.
+    ///
+    /// # Return Value
+    ///
+    /// Returns `Some((message, lost_count))` where:
+    /// - `message`: The message read from the buffer
+    /// - `lost_count`: The number of messages that were lost due to buffer overflow
+    ///
+    /// Returns `None` if no new messages are available.
+    ///
+    /// # Performance
+    ///
+    /// This method clones the message when reading, which may have performance
+    /// implications for large or complex types. For better performance with
+    /// simple types, consider using `read()` if the type implements `Copy`.
+    pub fn read_clone(&mut self) -> Option<(T, usize)>
+    where
+        T: Clone,
+    {
+        unsafe {
+            self.read_copy().map(|(msg, lost_count)| {
+                let new_msg = msg.clone();
+                std::mem::forget(msg);
+                (new_msg, lost_count)
+            })
+        }
     }
 
     /// Read a message from the ring buffer with spinning.
@@ -793,8 +812,8 @@ mod tests {
         let (mut publisher, mut subscriber) = rb.split();
 
         // Write string messages
-        publisher.write("hello".to_string());
-        publisher.write("world".to_string());
+        publisher.write_clean("hello".to_string());
+        publisher.write_clean("world".to_string());
 
         // Read string messages
         let result1 = subscriber.read_clone();
@@ -822,7 +841,7 @@ mod tests {
             data: "test".to_string(),
         };
 
-        publisher.write(test_data.clone());
+        publisher.write_clean(test_data.clone());
 
         let result = subscriber.read_clone();
         assert!(result.is_some());
