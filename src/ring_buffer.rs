@@ -100,14 +100,30 @@ impl<T> RingBuffer<T> {
     ///
     /// A new `RingBuffer` instance with the specified capacity.
     ///
+    /// # Capacity Adjustment
+    ///
+    /// The provided capacity will be automatically adjusted to the next power of 2
+    /// (e.g., 1000 becomes 1024, 1500 becomes 2048). This optimization enables
+    /// efficient bitwise operations for index wrapping:
+    ///
+    /// - **Index wrapping**: Instead of using modulo (`%`), we use bitwise AND (`&`)
+    ///   with `(cap - 1)` to wrap indices around the buffer
+    /// - **Performance**: Bitwise AND is significantly faster than modulo operation
+    /// - **Memory efficiency**: Powers of 2 allow for optimal memory alignment
+    ///
     /// # Example
     ///
     /// ```rust
     /// use trading_system_demo::ring_buffer::RingBuffer;
     ///
+    /// // Capacity 1000 will be adjusted to 1024 (2^10)
     /// let buffer = RingBuffer::<String>::new(1000);
+    ///
+    /// // Capacity 1500 will be adjusted to 2048 (2^11)
+    /// let buffer2 = RingBuffer::<String>::new(1500);
     /// ```
     pub fn new(cap: usize) -> Self {
+        let cap = cap.max(1).next_power_of_two();
         let buffer: Box<[Slot<T>]> = (0..cap)
             .map(|_| Slot {
                 version: AtomicUsize::new(0),
@@ -119,6 +135,11 @@ impl<T> RingBuffer<T> {
             buffer,
             cap,
         }
+    }
+
+    /// Returns the capacity of the ring buffer.
+    pub fn get_cap(&self) -> usize {
+        self.cap
     }
 
     /// Splits the ring buffer into a publisher and subscriber pair.
@@ -138,7 +159,7 @@ impl<T> RingBuffer<T> {
     /// ```rust
     /// use trading_system_demo::ring_buffer::RingBuffer;
     ///
-    /// let mut buffer = RingBuffer::new(100);
+    /// let mut buffer = RingBuffer::<i32>::new(100);
     /// let (mut publisher, mut subscriber) = buffer.split();
     ///
     /// // Create multiple subscribers
@@ -148,13 +169,14 @@ impl<T> RingBuffer<T> {
         let publisher = Publisher {
             writer_idx: &mut self.writer_idx,
             buffer: &self.buffer,
-            cap: self.cap,
+            cap_mask: self.cap - 1,
         };
         let subscriber = Subscriber {
             version: 2,
             reader_idx: 0,
             buffer: &self.buffer,
-            cap: self.cap,
+            cap_mask: self.cap - 1,
+            cap_zeros_sub_one: self.cap.trailing_zeros() as usize - 1,
         };
         (publisher, subscriber)
     }
@@ -191,10 +213,13 @@ pub struct Publisher<'a, T> {
     ///
     /// Contains all the message slots that can be written to.
     buffer: &'a [Slot<T>],
-    /// The total capacity of the ring buffer.
+    /// The capacity mask of the ring buffer, which is (cap - 1).
     ///
     /// Used to wrap the writer index when it reaches the end of the buffer.
-    cap: usize,
+    /// Since the capacity is always a power of 2, this mask contains all 1s
+    /// in the lower bits, enabling fast bitwise AND operations for modulo.
+    /// For example, if cap = 1024, then cap_mask = 1023 (binary: 1111111111).
+    cap_mask: usize,
 }
 
 impl<'a, T> Publisher<'a, T> {
@@ -232,7 +257,7 @@ impl<'a, T> Publisher<'a, T> {
             ptr::write_volatile(slot.msg.get(), MaybeUninit::new(msg));
         }
         slot.version.fetch_add(1, Ordering::Release);
-        *self.writer_idx = (*self.writer_idx + 1) % self.cap;
+        *self.writer_idx = (*self.writer_idx + 1) & self.cap_mask;
     }
 }
 
@@ -279,10 +304,17 @@ pub struct Subscriber<'a, T> {
     ///
     /// Contains all the message slots that can be read from.
     buffer: &'a [Slot<T>],
-    /// The total capacity of the ring buffer.
+    /// The capacity mask of the ring buffer, which is (cap - 1).
     ///
     /// Used to wrap the reader index when it reaches the end of the buffer.
-    cap: usize,
+    /// Since the capacity is always a power of 2, this mask contains all 1s
+    /// in the lower bits, enabling fast bitwise AND operations for modulo.
+    /// For example, if cap = 1024, then cap_mask = 1023 (binary: 1111111111).
+    cap_mask: usize,
+    /// The number of zeros in the capacity, minus 1.
+    ///
+    /// Used to calculate the lost count.
+    cap_zeros_sub_one: usize,
 }
 
 impl<'a, T> Subscriber<'a, T> {
@@ -361,10 +393,10 @@ impl<'a, T> Subscriber<'a, T> {
                 std::hint::spin_loop();
                 continue;
             }
-            let lost_count = (version - self.version) / 2 * self.cap;
+            let lost_count = (version - self.version) << self.cap_zeros_sub_one;
             self.version = version;
-            self.reader_idx = (self.reader_idx + 1) % self.cap;
-            self.version += (self.reader_idx == 0) as usize * 2;
+            self.reader_idx = (self.reader_idx + 1) & self.cap_mask;
+            self.version += ((self.reader_idx == 0) as usize) << 1;
             return Some((result, lost_count));
         }
     }
@@ -441,16 +473,12 @@ impl<'a, T> Subscriber<'a, T> {
     ///
     /// ```rust
     /// use trading_system_demo::ring_buffer::RingBuffer;
-    /// use std::thread;
     ///
     /// let mut buffer = RingBuffer::new(100);
     /// let (mut publisher, mut subscriber) = buffer.split();
     ///
-    /// // Spawn a thread to write messages
-    /// thread::spawn(move || {
-    ///     thread::sleep(std::time::Duration::from_millis(10));
-    ///     publisher.write("Hello");
-    /// });
+    /// // Write a message
+    /// publisher.write("Hello");
     ///
     /// // Wait for message with spinning
     /// let (message, lost_count) = subscriber.read_spinning();
@@ -485,23 +513,19 @@ impl<'a, T> Subscriber<'a, T> {
 ///
 /// ```rust
 /// use trading_system_demo::ring_buffer::RingBuffer;
-/// use std::thread;
 ///
 /// let mut buffer = RingBuffer::new(100);
 /// let (mut publisher, mut subscriber) = buffer.split();
 ///
-/// // Spawn a thread to write messages
-/// thread::spawn(move || {
-///     for i in 0..10 {
-///         publisher.write(i);
-///         thread::sleep(std::time::Duration::from_millis(10));
-///     }
-/// });
+/// // Write messages
+/// for i in 0..5 {
+///     publisher.write(i);
+/// }
 ///
 /// // Process messages as they arrive
 /// for (message, lost_count) in subscriber.spinning_iter() {
 ///     println!("Received: {}, Lost: {}", message, lost_count);
-///     if message == 9 {
+///     if message == 4 {
 ///         break; // Exit after receiving the last message
 ///     }
 /// }
@@ -538,23 +562,19 @@ impl<'a, T> Subscriber<'a, T> {
     ///
     /// ```rust
     /// use trading_system_demo::ring_buffer::RingBuffer;
-    /// use std::thread;
     ///
     /// let mut buffer = RingBuffer::new(100);
     /// let (mut publisher, mut subscriber) = buffer.split();
     ///
-    /// // Spawn a thread to write messages
-    /// thread::spawn(move || {
-    ///     for i in 0..5 {
-    ///         publisher.write(i);
-    ///         thread::sleep(std::time::Duration::from_millis(10));
-    ///     }
-    /// });
+    /// // Write messages
+    /// for i in 0..3 {
+    ///     publisher.write(i);
+    /// }
     ///
     /// // Process messages as they arrive
     /// for (message, lost_count) in subscriber.spinning_iter() {
     ///     println!("Received: {}, Lost: {}", message, lost_count);
-    ///     if message == 4 {
+    ///     if message == 2 {
     ///         break; // Exit after receiving the last message
     ///     }
     /// }
@@ -574,6 +594,22 @@ mod tests {
         assert_eq!(rb.cap, 4);
         assert_eq!(rb.writer_idx, 0);
         assert_eq!(rb.buffer.len(), 4);
+    }
+
+    #[test]
+    fn test_capacity_adjustment_to_power_of_two() {
+        // Test that capacities are adjusted to the next power of 2
+        let rb1 = RingBuffer::<i32>::new(1000);
+        assert_eq!(rb1.get_cap(), 1024); // 2^10
+
+        let rb2 = RingBuffer::<i32>::new(1500);
+        assert_eq!(rb2.get_cap(), 2048); // 2^11
+
+        let rb3 = RingBuffer::<i32>::new(3);
+        assert_eq!(rb3.get_cap(), 4); // 2^2
+
+        let rb4 = RingBuffer::<i32>::new(1024);
+        assert_eq!(rb4.get_cap(), 1024); // Already a power of 2
     }
 
     #[test]

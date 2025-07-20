@@ -25,11 +25,11 @@ fn main() {
             let request: &MarketUpdateRequest = match (&value[..]).try_into() {
                 Ok(request) => request,
                 Err(e) => {
-                    eprintln!("Error parsing market update: {:?}", e);
+                    eprintln!("Error parsing market update: {e:?}");
                     continue;
                 }
             };
-            println!("{:?}", request);
+            println!("{request:?}");
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }

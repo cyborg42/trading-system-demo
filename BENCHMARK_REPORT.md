@@ -32,6 +32,6 @@ cargo bench --bench bench_ring_buffer
 
 | Implementation | Average Latency | Performance |
 |----------------|-----------------|-------------|
-| **Custom Ring Buffer** | **72.8μs** | 🏆 **Best** |
-| Crossbeam Unbounded | 153μs | 2.1x higher |
-| Crossbeam Bounded | 346μs | 4.7x higher |
+| **Custom Ring Buffer** | **66.3μs** | 🏆 **Best** |
+| Crossbeam Unbounded | 153μs | 2.3x higher |
+| Crossbeam Bounded | 346μs | 5.2x higher |
