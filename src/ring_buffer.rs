@@ -252,7 +252,7 @@ impl<'a, T> Publisher<'a, T> {
         // Only one thread can write to the buffer at a time, so we don't need to check for version
         debug_assert!(version & 1 == 0);
         unsafe {
-            slot.msg.get().cast::<T>().write(msg);
+            ptr::write_volatile(slot.msg.get().cast::<T>(), msg);
         }
         slot.version.fetch_add(1, Ordering::Release);
         *self.writer_idx = (*self.writer_idx + 1) & self.cap_mask;
@@ -273,7 +273,7 @@ impl<'a, T> Publisher<'a, T> {
             }
         }
         unsafe {
-            slot.msg.get().cast::<T>().write(msg);
+            ptr::write_volatile(slot.msg.get().cast::<T>(), msg);
         }
         slot.version.fetch_add(1, Ordering::Release);
         *self.writer_idx = (*self.writer_idx + 1) & self.cap_mask;

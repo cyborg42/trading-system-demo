@@ -63,8 +63,8 @@ cargo bench --bench bench_ring_buffer
 
 **Performance Results:**
 
-- **Custom Ring Buffer**: 2.18ms (100k messages)
-- **Crossbeam Unbounded**: 4.32ms (2.0x slower)
-- **Crossbeam Bounded**: 6.16ms (2.8x slower)
+- **Custom Ring Buffer**: 1.08ms (100k messages)
+- **Crossbeam Unbounded**: 2.07ms (1.9x slower)
+- **Crossbeam Bounded**: 2.05ms (1.9x slower)
 
 See [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md) for detailed performance analysis.

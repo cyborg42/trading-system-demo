@@ -120,7 +120,7 @@ fn benchmark_custom_ring_buffer(c: &mut Criterion) {
                 let consumer_handle = s.spawn(move || {
                     let mut received_count = 0;
                     while received_count < MESSAGES_PER_TEST {
-                        if let Some((update, lost)) = subscriber.read_clone() {
+                        if let Some((update, lost)) = subscriber.read() {
                             black_box(update);
                             received_count += 1;
                             received_count += lost;
@@ -156,7 +156,7 @@ fn benchmark_latency(c: &mut Criterion) {
                         let mut received_count: usize = 0;
                         let mut count: u32 = 0;
                         while received_count < MESSAGES_PER_TEST {
-                            if let Some((update, lost)) = subscriber.read_clone() {
+                            if let Some((update, lost)) = subscriber.read() {
                                 total_latency += update.1.elapsed();
                                 received_count += 1;
                                 received_count += lost;
