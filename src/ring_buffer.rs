@@ -411,35 +411,7 @@ impl<'a, T> Subscriber<'a, T> {
     where
         T: Clone,
     {
-        let slot = unsafe { &self.buffer.get_unchecked(self.reader_idx) };
-        loop {
-            let version = slot.version.load(Ordering::Acquire);
-            if version & 1 != 0 {
-                // Message is being written
-                std::hint::spin_loop();
-                continue;
-            }
-            if version < self.version {
-                // No new messages
-                return None;
-            }
-            let msg = unsafe {
-                let msg = ptr::read_volatile(slot.msg.get());
-                msg.assume_init_ref().clone()
-            };
-            fence(Ordering::Acquire);
-            let new_version = slot.version.load(Ordering::Relaxed);
-            if version != new_version {
-                // Message is being written
-                std::hint::spin_loop();
-                continue;
-            }
-            let lost_count = (version - self.version) / 2 * self.cap;
-            self.version = version;
-            self.reader_idx = (self.reader_idx + 1) % self.cap;
-            self.version += (self.reader_idx == 0) as usize * 2;
-            return Some((msg, lost_count));
-        }
+        unsafe { self.read_zerocopy(|msg| msg.clone()) }
     }
 
     /// Read a message from the ring buffer with spinning.
