@@ -123,7 +123,7 @@ impl<T> RingBuffer<T> {
     /// let buffer2 = RingBuffer::<String>::new(1500);
     /// ```
     pub fn new(cap: usize) -> Self {
-        let cap = cap.max(1).next_power_of_two();
+        let cap = cap.max(2).next_power_of_two();
         let buffer: Box<[Slot<T>]> = (0..cap)
             .map(|_| Slot {
                 version: AtomicUsize::new(0),
@@ -263,7 +263,7 @@ impl<'a, T> Publisher<'a, T> {
     /// This method writes a message to the current write position and advances
     /// the write index. If the buffer is full, the oldest message will be overwritten.
     pub fn write_clean(&mut self, msg: T) {
-        let slot = unsafe { &self.buffer.get_unchecked(*self.writer_idx) };
+        let slot = unsafe { self.buffer.get_unchecked(*self.writer_idx) };
         let version = slot.version.fetch_add(1, Ordering::Acquire);
         // Only one thread can write to the buffer at a time, so we don't need to check for version
         debug_assert!(version & 1 == 0);
@@ -398,7 +398,7 @@ impl<'a, T> Subscriber<'a, T> {
     /// // let result = unsafe { subscriber.read_copy() }; // DOUBLE FREE!
     /// ```
     pub unsafe fn read_copy(&mut self) -> Option<(T, usize)> {
-        let slot = unsafe { &self.buffer.get_unchecked(self.reader_idx) };
+        let slot = unsafe { self.buffer.get_unchecked(self.reader_idx) };
         loop {
             let version = slot.version.load(Ordering::Acquire);
             if version & 1 != 0 {
