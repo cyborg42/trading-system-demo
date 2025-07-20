@@ -361,18 +361,10 @@ impl<'a, T> Subscriber<'a, T> {
                 std::hint::spin_loop();
                 continue;
             }
-            let lost_count = if version > self.version {
-                // Messages are lost
-                let lost = ((version - self.version) / 2) * self.cap;
-                self.version = version;
-                lost
-            } else {
-                0
-            };
+            let lost_count = (version - self.version) / 2 * self.cap;
+            self.version = version;
             self.reader_idx = (self.reader_idx + 1) % self.cap;
-            if self.reader_idx == 0 {
-                self.version += 2;
-            }
+            self.version += (self.reader_idx == 0) as usize * 2;
             return Some((result, lost_count));
         }
     }
@@ -442,18 +434,10 @@ impl<'a, T> Subscriber<'a, T> {
                 std::hint::spin_loop();
                 continue;
             }
-            let lost_count = if version > self.version {
-                // Messages are lost
-                let lost = ((version - self.version) / 2) * self.cap;
-                self.version = version;
-                lost
-            } else {
-                0
-            };
+            let lost_count = (version - self.version) / 2 * self.cap;
+            self.version = version;
             self.reader_idx = (self.reader_idx + 1) % self.cap;
-            if self.reader_idx == 0 {
-                self.version += 2;
-            }
+            self.version += (self.reader_idx == 0) as usize * 2;
             return Some((msg, lost_count));
         }
     }
